@@ -46,21 +46,21 @@ WORKDIR /app
 
 ## バージョン差分
 
-| 教材 | 本プロジェクト |
-|------|-------------|
-| `node:19.4.0` | `node:22` |
-| `Next.js 13.4.19` → `14.1.4` | `Next.js 15`（latest） |
+| 教材                         | 本プロジェクト           |
+| ---------------------------- | ------------------------ |
+| `node:19.4.0`                | `node:22`                |
+| `Next.js 13.4.19` → `14.1.4` | `Next.js 15`（latest）   |
 | Pages Router（`src/pages/`） | App Router（`src/app/`） |
 
 ## ルーティング
 
-| Pages Router（教材） | App Router（本プロジェクト） |
-|--------------------|--------------------------|
-| `src/pages/index.tsx` | `src/app/page.tsx` |
-| `src/pages/articles/[id].tsx` | `src/app/articles/[id]/page.tsx` |
-| `src/pages/_app.tsx` | `src/app/layout.tsx` |
-| `src/pages/_document.tsx` | `src/app/layout.tsx`（`<html>` タグ管理） |
-| `src/pages/api/xxx.ts` | `src/app/api/xxx/route.ts` |
+| Pages Router（教材）          | App Router（本プロジェクト）              |
+| ----------------------------- | ----------------------------------------- |
+| `src/pages/index.tsx`         | `src/app/page.tsx`                        |
+| `src/pages/articles/[id].tsx` | `src/app/articles/[id]/page.tsx`          |
+| `src/pages/_app.tsx`          | `src/app/layout.tsx`                      |
+| `src/pages/_document.tsx`     | `src/app/layout.tsx`（`<html>` タグ管理） |
+| `src/pages/api/xxx.ts`        | `src/app/api/xxx/route.ts`                |
 
 ## コンポーネント
 
@@ -155,6 +155,9 @@ docker compose exec rails bash
 
 ```bash
 MSYS_NO_PATHCONV=1 docker compose exec rails /bin/bash
+MSYS_NO_PATHCONV=1 docker compose exec next /bin/bash
+++ npm installはrootじゃなければエラーが出てできない
+MSYS_NO_PATHCONV=1 docker compose exec -u root next bash
 ```
 
 ---

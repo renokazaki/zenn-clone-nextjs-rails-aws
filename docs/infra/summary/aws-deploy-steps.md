@@ -1547,3 +1547,495 @@ on:
 | IAMユーザーのアクセスキー発行 | △ | CDKで生成できるが、値の管理はSecrets Manager |
 | credentials（Rails master.key）| × | GitにコミットせずECSの環境変数で渡す |
 | GitHub Secrets | × | GitHubのUIから手動登録 |
+
+---
+
+## 付録：IaCによる「使う時だけ起動・終わったら削除」戦略
+
+### IaCのコスト削減メリットは本当か？
+
+**結論：本当です。ただし条件があります。**
+
+AWSは基本的に「稼働した時間」に対して課金されます。
+CDK で `cdk deploy` / `cdk destroy` を使えば、必要な時だけインフラを丸ごと起動・削除できるため、
+開発・学習用途では大幅なコスト削減が可能です。
+
+#### リソース別のコスト特性
+
+| リソース | 課金の仕組み | 削除の速さ | 削除によるコスト削減効果 |
+|---|---|---|---|
+| ECS Fargate | タスク稼働時間 × CPU/メモリ量 | ◎ 数分 | **大きい**（主要コストの一つ）|
+| ALB | 時間課金 + 通信量課金 | ◎ 数分 | **大きい**（時間課金あり）|
+| RDS | インスタンス稼働時間 | △ 15〜20分かかる | **大きい**（最も高い）|
+| VPC / セキュリティグループ | ほぼ無料 | ◎ 数秒 | 小さい（消さなくてもよい）|
+| ECR | 保存したイメージのストレージ容量 | ◎ 数秒 | 小さい（数十円/月程度）|
+| ACM 証明書 | **完全無料** | ◎ 数秒 | 0円（削除しなくてもよい）|
+| Route53 ホストゾーン | $0.50 / 月 固定 | ◎ 数秒 | 小さい |
+| Route53 ドメイン | 年間 $13 固定（年払い） | × 返却不可 | **削除しても止まらない** |
+
+#### 費用のイメージ比較
+
+| 運用パターン | 月額目安 |
+|---|---|
+| 常時稼働（ECS×2 + ALB×2 + RDS） | 約 $30〜50 / 月（約4,500〜7,500円）|
+| 週1回・数時間だけ起動 | 約 $1〜3 / 月（約150〜450円）|
+| 月1回・数時間だけ起動 | 数十円 / 月 |
+
+---
+
+### 「開発時のみ構成を起動する」ための CDK スタック分割
+
+コスト削減を実現するために、**「常時残すリソース」と「使う時だけ起動するリソース」をスタックで分割**するのがおすすめです。
+
+```
+cdk/
+  lib/
+    permanent-stack.ts    ← 常時残す（VPC・ECR・ACM・Route53 など）
+    app-stack.ts          ← 使う時だけ起動（RDS・ECS・ALB など）
+  bin/
+    cdk.ts                ← 両スタックをまとめて管理
+```
+
+#### `cdk/bin/cdk.ts`
+
+```typescript
+import * as cdk from 'aws-cdk-lib';
+import { PermanentStack } from '../lib/permanent-stack';
+import { AppStack } from '../lib/app-stack';
+
+const app = new cdk.App();
+
+// 常時残すスタック（ドメイン・SSL・ECR など）
+const permanent = new PermanentStack(app, 'ZennClonePermanentStack', {
+  env: { region: 'ap-northeast-1' },
+});
+
+// 使う時だけ起動するスタック（RDS・ECS・ALB など）
+// permanent スタックの出力値（VPCなど）を参照する
+new AppStack(app, 'ZennCloneAppStack', {
+  vpc: permanent.vpc,
+  certificate: permanent.certificate,
+  hostedZone: permanent.hostedZone,
+  railsRepo: permanent.railsRepo,
+  nginxRepo: permanent.nginxRepo,
+  nextRepo: permanent.nextRepo,
+  env: { region: 'ap-northeast-1' },
+});
+```
+
+#### `cdk/lib/permanent-stack.ts`（常時残すリソース）
+
+```typescript
+import * as cdk from 'aws-cdk-lib';
+import { Construct } from 'constructs';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as ecr from 'aws-cdk-lib/aws-ecr';
+import * as acm from 'aws-cdk-lib/aws-certificatemanager';
+import * as route53 from 'aws-cdk-lib/aws-route53';
+
+export class PermanentStack extends cdk.Stack {
+  // 他のスタックから参照できるようにpublicで公開する
+  public readonly vpc: ec2.Vpc;
+  public readonly hostedZone: route53.IHostedZone;
+  public readonly certificate: acm.Certificate;
+  public readonly railsRepo: ecr.Repository;
+  public readonly nginxRepo: ecr.Repository;
+  public readonly nextRepo: ecr.Repository;
+
+  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
+    super(scope, id, props);
+
+    // VPC（ほぼ無料なので常時残す）
+    this.vpc = new ec2.Vpc(this, 'Vpc', {
+      vpcName: 'zenn-clone-vpc',
+      ipAddresses: ec2.IpAddresses.cidr('10.0.0.0/16'),
+      natGateways: 0,
+      subnetConfiguration: [
+        { cidrMask: 24, name: 'public',  subnetType: ec2.SubnetType.PUBLIC },
+        { cidrMask: 24, name: 'private', subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+      ],
+    });
+
+    // Route53 ホストゾーンを参照（ドメインは事前にGUIで購入済み）
+    this.hostedZone = route53.HostedZone.fromLookup(this, 'HostedZone', {
+      domainName: 'your-domain.com', // ← 自分のドメインに置き換える
+    });
+
+    // ACM 証明書（完全無料なので常時残す）
+    this.certificate = new acm.Certificate(this, 'Certificate', {
+      domainName: 'your-domain.com',
+      subjectAlternativeNames: ['*.your-domain.com'],
+      validation: acm.CertificateValidation.fromDns(this.hostedZone),
+    });
+
+    // ECR リポジトリ（イメージのストレージ課金は微小なので常時残す）
+    this.railsRepo = new ecr.Repository(this, 'RailsRepo', {
+      repositoryName: 'zenn-clone-rails',
+      removalPolicy: cdk.RemovalPolicy.RETAIN, // 削除されないよう保護
+    });
+    this.nginxRepo = new ecr.Repository(this, 'NginxRepo', {
+      repositoryName: 'zenn-clone-nginx',
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+    this.nextRepo = new ecr.Repository(this, 'NextRepo', {
+      repositoryName: 'zenn-clone-next',
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+  }
+}
+```
+
+#### `cdk/lib/app-stack.ts`（使う時だけ起動するリソース）
+
+```typescript
+import * as cdk from 'aws-cdk-lib';
+import { Construct } from 'constructs';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as ecs from 'aws-cdk-lib/aws-ecs';
+import * as ecr from 'aws-cdk-lib/aws-ecr';
+import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
+import * as rds from 'aws-cdk-lib/aws-rds';
+import * as iam from 'aws-cdk-lib/aws-iam';
+import * as logs from 'aws-cdk-lib/aws-logs';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import * as route53 from 'aws-cdk-lib/aws-route53';
+import * as route53targets from 'aws-cdk-lib/aws-route53-targets';
+import * as acm from 'aws-cdk-lib/aws-certificatemanager';
+import * as fs from 'fs';
+
+// PermanentStackから受け取る値の型定義
+interface AppStackProps extends cdk.StackProps {
+  vpc: ec2.Vpc;
+  certificate: acm.Certificate;
+  hostedZone: route53.IHostedZone;
+  railsRepo: ecr.Repository;
+  nginxRepo: ecr.Repository;
+  nextRepo: ecr.Repository;
+}
+
+export class AppStack extends cdk.Stack {
+  constructor(scope: Construct, id: string, props: AppStackProps) {
+    super(scope, id, props);
+
+    const { vpc, certificate, hostedZone, railsRepo, nginxRepo, nextRepo } = props;
+
+    // -----------------------------------------------
+    // セキュリティグループ
+    // -----------------------------------------------
+    const ecsBackendSg = new ec2.SecurityGroup(this, 'EcsBackendSg', {
+      securityGroupName: 'zenn-clone-ecs-backend-security-group',
+      vpc,
+      allowAllOutbound: true,
+    });
+    ecsBackendSg.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(80));
+    ecsBackendSg.addIngressRule(ec2.Peer.anyIpv6(), ec2.Port.tcp(80));
+
+    const rdsSg = new ec2.SecurityGroup(this, 'RdsSg', {
+      securityGroupName: 'zenn-clone-rds-security-group',
+      vpc,
+      allowAllOutbound: true,
+    });
+    rdsSg.addIngressRule(ecsBackendSg, ec2.Port.tcp(3306));
+
+    const ecsFrontendSg = new ec2.SecurityGroup(this, 'EcsFrontendSg', {
+      securityGroupName: 'zenn-clone-ecs-frontend-security-group',
+      vpc,
+      allowAllOutbound: true,
+    });
+    ecsFrontendSg.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(80));
+    ecsFrontendSg.addIngressRule(ec2.Peer.anyIpv6(), ec2.Port.tcp(80));
+
+    const albBackendSg = new ec2.SecurityGroup(this, 'AlbBackendSg', {
+      securityGroupName: 'zenn-clone-alb-backend-security-group',
+      vpc,
+      allowAllOutbound: false,
+    });
+    albBackendSg.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(80));
+    albBackendSg.addIngressRule(ec2.Peer.anyIpv6(), ec2.Port.tcp(80));
+    albBackendSg.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443));
+    albBackendSg.addIngressRule(ec2.Peer.anyIpv6(), ec2.Port.tcp(443));
+    albBackendSg.addEgressRule(ecsBackendSg, ec2.Port.tcp(80));
+
+    const albFrontendSg = new ec2.SecurityGroup(this, 'AlbFrontendSg', {
+      securityGroupName: 'zenn-clone-alb-frontend-security-group',
+      vpc,
+      allowAllOutbound: false,
+    });
+    albFrontendSg.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(80));
+    albFrontendSg.addIngressRule(ec2.Peer.anyIpv6(), ec2.Port.tcp(80));
+    albFrontendSg.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443));
+    albFrontendSg.addIngressRule(ec2.Peer.anyIpv6(), ec2.Port.tcp(443));
+    albFrontendSg.addEgressRule(ecsFrontendSg, ec2.Port.tcp(80));
+
+    // -----------------------------------------------
+    // RDS（最もコストが高い）
+    // -----------------------------------------------
+    const dbSecret = new secretsmanager.Secret(this, 'DbSecret', {
+      secretName: 'zenn-clone-db-secret',
+      generateSecretString: {
+        secretStringTemplate: JSON.stringify({ username: 'admin' }),
+        generateStringKey: 'password',
+        excludePunctuation: true,
+      },
+    });
+
+    const db = new rds.DatabaseInstance(this, 'ZennCloneDb', {
+      instanceIdentifier: 'zenn-clone-db',
+      engine: rds.DatabaseInstanceEngine.mysql({
+        version: rds.MysqlEngineVersion.VER_8_0_32,
+      }),
+      instanceType: ec2.InstanceType.of(ec2.InstanceClass.T3, ec2.InstanceSize.MICRO),
+      vpc,
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+      securityGroups: [rdsSg],
+      credentials: rds.Credentials.fromSecret(dbSecret),
+      databaseName: 'myapp_production',
+      deletionProtection: false,
+      removalPolicy: cdk.RemovalPolicy.DESTROY, // cdk destroy で削除される
+    });
+
+    // -----------------------------------------------
+    // ECS クラスター・IAMロール
+    // -----------------------------------------------
+    const ecsTaskExecutionRole = new iam.Role(this, 'EcsTaskExecutionRole', {
+      roleName: 'ecsTaskExecutionRole',
+      assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonEC2ContainerRegistryReadOnly'),
+        iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonECS_FullAccess'),
+        iam.ManagedPolicy.fromAwsManagedPolicyName('CloudWatchFullAccess'),
+      ],
+    });
+
+    const cluster = new ecs.Cluster(this, 'ZennCloneCluster', {
+      clusterName: 'zenn-clone-cluster',
+      vpc,
+    });
+
+    // -----------------------------------------------
+    // タスク定義（backend: Rails + Nginx）
+    // -----------------------------------------------
+    const railsMasterKey = fs.readFileSync('../../rails/config/master.key', 'utf8').trim();
+
+    const backendTaskDef = new ecs.FargateTaskDefinition(this, 'BackendTaskDef', {
+      family: 'zenn-clone-task-definition-backend',
+      cpu: 256,
+      memoryLimitMiB: 512,
+      taskRole: ecsTaskExecutionRole,
+      executionRole: ecsTaskExecutionRole,
+      volumes: [{ name: 'rails-socket' }],
+    });
+
+    const railsContainer = backendTaskDef.addContainer('rails', {
+      image: ecs.ContainerImage.fromEcrRepository(railsRepo, 'latest'),
+      essential: true,
+      portMappings: [{ containerPort: 3000 }],
+      environment: {
+        RAILS_LOG_TO_STDOUT: 'true',
+        RAILS_MASTER_KEY: railsMasterKey,
+      },
+      healthCheck: {
+        command: ['CMD-SHELL', 'curl --unix-socket /myapp/tmp/sockets/puma.sock localhost/api/v1/health_check || exit 1'],
+        interval: cdk.Duration.seconds(30),
+        timeout: cdk.Duration.seconds(10),
+        retries: 3,
+        startPeriod: cdk.Duration.seconds(60),
+      },
+      logging: ecs.LogDrivers.awsLogs({
+        streamPrefix: 'ecs',
+        logGroup: new logs.LogGroup(this, 'BackendLogGroup', {
+          logGroupName: '/ecs/zenn-clone-task-definition-backend',
+          removalPolicy: cdk.RemovalPolicy.DESTROY,
+        }),
+      }),
+    });
+    railsContainer.addMountPoints({ containerPath: '/myapp/tmp', sourceVolume: 'rails-socket', readOnly: false });
+
+    const nginxContainer = backendTaskDef.addContainer('nginx', {
+      image: ecs.ContainerImage.fromEcrRepository(nginxRepo, 'latest'),
+      essential: true,
+      portMappings: [{ containerPort: 80 }],
+      healthCheck: {
+        command: ['CMD-SHELL', 'curl -f http://localhost/api/v1/health_check || exit 1'],
+        interval: cdk.Duration.seconds(30),
+        timeout: cdk.Duration.seconds(10),
+        retries: 3,
+        startPeriod: cdk.Duration.seconds(90),
+      },
+      logging: ecs.LogDrivers.awsLogs({
+        streamPrefix: 'ecs',
+        logGroup: new logs.LogGroup(this, 'NginxLogGroup', {
+          logGroupName: '/ecs/zenn-clone-task-definition-backend-nginx',
+          removalPolicy: cdk.RemovalPolicy.DESTROY,
+        }),
+      }),
+    });
+    nginxContainer.addMountPoints({ containerPath: '/myapp/tmp', sourceVolume: 'rails-socket', readOnly: false });
+    nginxContainer.addContainerDependencies({ container: railsContainer, condition: ecs.ContainerDependencyCondition.HEALTHY });
+
+    // -----------------------------------------------
+    // タスク定義（frontend: Next.js）
+    // -----------------------------------------------
+    const frontendTaskDef = new ecs.FargateTaskDefinition(this, 'FrontendTaskDef', {
+      family: 'zenn-clone-task-definition-frontend',
+      cpu: 256,
+      memoryLimitMiB: 512,
+      taskRole: ecsTaskExecutionRole,
+      executionRole: ecsTaskExecutionRole,
+    });
+    frontendTaskDef.addContainer('next', {
+      image: ecs.ContainerImage.fromEcrRepository(nextRepo, 'latest'),
+      essential: true,
+      portMappings: [{ containerPort: 80 }],
+      logging: ecs.LogDrivers.awsLogs({
+        streamPrefix: 'ecs',
+        logGroup: new logs.LogGroup(this, 'FrontendLogGroup', {
+          logGroupName: '/ecs/zenn-clone-task-definition-frontend',
+          removalPolicy: cdk.RemovalPolicy.DESTROY,
+        }),
+      }),
+    });
+
+    // -----------------------------------------------
+    // ALB（backend）+ ECSサービス + Route53
+    // -----------------------------------------------
+    const backendTg = new elbv2.ApplicationTargetGroup(this, 'BackendTg', {
+      targetGroupName: 'zenn-clone-alb-backend-tg',
+      vpc,
+      protocol: elbv2.ApplicationProtocol.HTTP,
+      port: 80,
+      targetType: elbv2.TargetType.IP,
+      healthCheck: { path: '/api/v1/health_check' },
+    });
+
+    const albBackend = new elbv2.ApplicationLoadBalancer(this, 'AlbBackend', {
+      loadBalancerName: 'zenn-clone-alb-backend',
+      vpc,
+      internetFacing: true,
+      securityGroup: albBackendSg,
+      vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
+    });
+    albBackend.addListener('BackendHttpListener', { port: 80, defaultTargetGroups: [backendTg] });
+    albBackend.addListener('BackendHttpsListener', { port: 443, certificates: [certificate], defaultTargetGroups: [backendTg] });
+
+    const backendService = new ecs.FargateService(this, 'BackendService', {
+      serviceName: 'zenn-clone-backend-service',
+      cluster,
+      taskDefinition: backendTaskDef,
+      desiredCount: 1,
+      securityGroups: [ecsBackendSg],
+      vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
+      assignPublicIp: true,
+    });
+    backendTg.addTarget(backendService.loadBalancerTarget({ containerName: 'nginx', containerPort: 80 }));
+
+    new route53.ARecord(this, 'BackendARecord', {
+      zone: hostedZone,
+      recordName: 'backend',
+      target: route53.RecordTarget.fromAlias(new route53targets.LoadBalancerTarget(albBackend)),
+    });
+
+    // -----------------------------------------------
+    // ALB（frontend）+ ECSサービス + Route53
+    // -----------------------------------------------
+    const frontendTg = new elbv2.ApplicationTargetGroup(this, 'FrontendTg', {
+      targetGroupName: 'zenn-clone-alb-frontend-tg',
+      vpc,
+      protocol: elbv2.ApplicationProtocol.HTTP,
+      port: 80,
+      targetType: elbv2.TargetType.IP,
+      healthCheck: { path: '/api/health_check' },
+    });
+
+    const albFrontend = new elbv2.ApplicationLoadBalancer(this, 'AlbFrontend', {
+      loadBalancerName: 'zenn-clone-alb-frontend',
+      vpc,
+      internetFacing: true,
+      securityGroup: albFrontendSg,
+      vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
+    });
+    albFrontend.addListener('FrontendHttpListener', {
+      port: 80,
+      defaultAction: elbv2.ListenerAction.redirect({ protocol: 'HTTPS', port: '443', statusCode: 'HTTP_301' }),
+    });
+    albFrontend.addListener('FrontendHttpsListener', { port: 443, certificates: [certificate], defaultTargetGroups: [frontendTg] });
+
+    const frontendService = new ecs.FargateService(this, 'FrontendService', {
+      serviceName: 'zenn-clone-frontend-service',
+      cluster,
+      taskDefinition: frontendTaskDef,
+      desiredCount: 1,
+      securityGroups: [ecsFrontendSg],
+      vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
+      assignPublicIp: true,
+    });
+    frontendTg.addTarget(frontendService.loadBalancerTarget({ containerName: 'next', containerPort: 80 }));
+
+    new route53.ARecord(this, 'FrontendARecord', {
+      zone: hostedZone,
+      recordName: '',
+      target: route53.RecordTarget.fromAlias(new route53targets.LoadBalancerTarget(albFrontend)),
+    });
+  }
+}
+```
+
+---
+
+### 実際の使い方：起動→作業→削除のサイクル
+
+#### 環境を起動する（開発・デモ・確認をするとき）
+
+```bash
+cd cdk
+
+# 常時残すリソースが未作成の場合は初回のみ実行
+cdk deploy ZennClonePermanentStack
+
+# 課金対象のリソース（RDS・ECS・ALB）を起動
+cdk deploy ZennCloneAppStack
+# → 完了まで約10〜20分（RDSの起動が一番時間がかかる）
+```
+
+#### 環境を削除する（作業が終わったとき）
+
+```bash
+cd cdk
+
+# 課金対象のリソース（RDS・ECS・ALB）をまとめて削除
+cdk destroy ZennCloneAppStack
+# → 完了まで約10〜15分
+# → この時点で大部分の課金が止まる
+```
+
+> `ZennClonePermanentStack`（VPC・ECR・ACM・Route53）は削除しなくてよいです。
+> これらはほぼ無料か月$0.50以下なので、常時残しておいた方が次回の起動が速くなります。
+
+#### 完全にクリーンアップするとき（学習終了後など）
+
+```bash
+# AppStack を先に削除（依存関係があるため順番が重要）
+cdk destroy ZennCloneAppStack
+
+# PermanentStack を削除
+cdk destroy ZennClonePermanentStack
+
+# ※ Route53 ドメインは AWS から返却できないため削除しても年額は発生し続ける
+```
+
+---
+
+### 注意点：RDSを毎回削除すると初回デプロイ処理が毎回走る
+
+`cdk deploy ZennCloneAppStack` でRDSを再作成すると、DBが空の状態から始まります。
+`entrypoint.prod.sh` の `db:create` と `db:seed` が毎回必要になるため、
+起動のたびに `entrypoint.prod.sh` のコメントアウトを外す/入れるの管理が必要です。
+
+#### 推奨の運用パターン
+
+| ユースケース | 推奨戦略 |
+|---|---|
+| ポートフォリオを常時公開したい | AppStackを常時起動（月$30〜50）|
+| 開発・学習中（毎週数時間だけ使う）| 作業時だけ AppStack を起動・削除（月$1〜3）|
+| 面接前など一時的に公開したい | デモ期間だけ AppStack を起動（数日分の課金のみ）|
+| 完全にやめる | 両スタックを削除（ドメイン代のみ残る）|

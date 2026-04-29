@@ -1,0 +1,15 @@
+# Next.js
+next/node_modules
+next/.next/
+next/out/
+next/.env*
+next/next-env.d.ts
+next/*.tsbuildinfo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
