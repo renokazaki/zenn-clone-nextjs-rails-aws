@@ -24,6 +24,7 @@ gem "config"
 gem "tzinfo-data", platforms: %i[mingw mswin x64_mingw jruby]
 
 group :development, :test do
+  gem "bullet"
   gem "factory_bot_rails"
   gem "faker"
   gem "letter_opener_web"

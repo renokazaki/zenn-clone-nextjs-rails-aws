@@ -74,4 +74,12 @@ Rails.application.configure do
   config.action_mailer.default_options = { from: "no-replay@example.com" }
   config.action_mailer.default_url_options = { host: "localhost:3000" }
   config.action_mailer.delivery_method = :letter_opener_web
+
+  # bullet: N+1検知
+  config.after_initialize do
+    Bullet.enable        = true
+    Bullet.alert         = true
+    Bullet.rails_logger  = true
+    Bullet.add_footer    = true
+  end
 end
