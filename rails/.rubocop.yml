@@ -1,5 +1,6 @@
-require:
+plugins:
   - rubocop-rails
+  - rubocop-rspec
 
 inherit_from:
   - config/rubocop/rubocop.yml
@@ -8,3 +9,4 @@ inherit_from:
 
 AllCops:
   TargetRubyVersion: 3.3
+  NewCops: enable
