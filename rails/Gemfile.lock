@@ -89,6 +89,9 @@ GEM
     bootsnap (1.24.1)
       msgpack (~> 1.2)
     builder (3.3.0)
+    bullet (8.1.1)
+      activesupport (>= 3.0.0)
+      uniform_notifier (~> 1.11)
     byebug (13.0.0)
       reline (>= 0.6.0)
     case_transform (0.2)
@@ -337,6 +340,7 @@ GEM
     unicode-display_width (3.2.0)
       unicode-emoji (~> 4.1)
     unicode-emoji (4.2.0)
+    uniform_notifier (1.18.0)
     uri (1.1.1)
     useragent (0.16.11)
     warden (1.2.9)
@@ -354,6 +358,7 @@ PLATFORMS
 DEPENDENCIES
   active_model_serializers
   bootsnap
+  bullet
   config
   devise
   devise-i18n
