@@ -1,0 +1,12 @@
+plugins:
+  - rubocop-rails
+  - rubocop-rspec
+
+inherit_from:
+  - config/rubocop/rubocop.yml
+  - config/rubocop/rails.yml
+  - config/rubocop/rspec.yml
+
+AllCops:
+  TargetRubyVersion: 3.3
+  NewCops: enable

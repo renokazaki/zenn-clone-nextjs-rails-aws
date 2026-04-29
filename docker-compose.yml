@@ -1,0 +1,41 @@
+services:
+  db:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_DATABASE: myapp_development
+      MYSQL_USER: user
+      MYSQL_PASSWORD: password
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+  rails:
+    build:
+      context: ./rails
+    command: bash -c "mkdir -p log && touch log/development.log && tail -f
+      log/development.log"
+    volumes:
+      - ./rails:/myapp
+    ports:
+      - 3000:3000
+    depends_on:
+      - db
+    tty: true
+    stdin_open: true
+  next:
+    build:
+      context: ./next
+      dockerfile: Dockerfile
+    tty: true
+    stdin_open: true
+    volumes:
+      - ./next:/app
+      - next_node_modules:/app/node_modules
+    ports:
+      - "8000:3000"
+    depends_on:
+      - rails
+volumes:
+  mysql_data:
+  next_node_modules:
