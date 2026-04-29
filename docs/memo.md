@@ -380,3 +380,29 @@ exit
 
 rails s -b '0.0.0.0'
 ```
+
+---
+
+# rspec実行時にPendingMigrationErrorが発生する
+
+## エラー内容
+
+```
+ActiveRecord::PendingMigrationError:
+  Migrations are pending. To resolve this issue, run:
+          bin/rails db:migrate
+  You have 1 pending migration:
+  db/migrate/XXXXXX_devise_token_auth_create_users.rb
+```
+
+## 原因
+
+テスト用DB（`RAILS_ENV=test`）に対してマイグレーションが実行されていない。開発用DBとテスト用DBは別々に管理されており、`rails db:migrate` だけでは開発用DBにしか適用されない。
+
+## 対処法
+
+テスト用DBに対して明示的にマイグレーションを実行する。
+
+```bash
+rails db:migrate RAILS_ENV=test
+```
