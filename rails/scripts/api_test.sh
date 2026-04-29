@@ -1,7 +1,7 @@
 #!/bin/bash
 
 BASE_URL="http://localhost:3000/api/v1"
-EMAIL="test2@example.com"
+EMAIL="test3@example.com"
 PASSWORD="password"
 
 # ヘルスチェック
@@ -43,16 +43,16 @@ sign_in_and_save() {
 
   ACCESS_TOKEN=$(echo "$HEADERS" | grep -i "^access-token:" | awk '{print $2}' | tr -d '\r')
   CLIENT=$(echo "$HEADERS" | grep -i "^client:" | awk '{print $2}' | tr -d '\r')
-  UID=$(echo "$HEADERS" | grep -i "^uid:" | awk '{print $2}' | tr -d '\r')
+  AUTH_UID=$(echo "$HEADERS" | grep -i "^uid:" | awk '{print $2}' | tr -d '\r')
 
   echo "access-token: $ACCESS_TOKEN"
   echo "client:       $CLIENT"
-  echo "uid:          $UID"
+  echo "uid:          $AUTH_UID"
 
   cat > /tmp/auth_tokens.env <<EOF
 ACCESS_TOKEN=$ACCESS_TOKEN
 CLIENT=$CLIENT
-UID=$UID
+AUTH_UID=$AUTH_UID
 EOF
   echo "トークンを /tmp/auth_tokens.env に保存しました"
   echo ""
@@ -70,7 +70,23 @@ request_with_token() {
     -X GET "$BASE_URL/health_check" \
     -H "access-token: $ACCESS_TOKEN" \
     -H "client: $CLIENT" \
-    -H "uid: $UID"
+    -H "uid: $AUTH_UID"
+  echo ""
+}
+
+# サインインユーザー取得
+get_current_user() {
+  echo "=== Get Current User ==="
+  if [ ! -f /tmp/auth_tokens.env ]; then
+    echo "先に sign_in_and_save を実行してください"
+    return 1
+  fi
+  source /tmp/auth_tokens.env
+  curl -s -w "\nStatus: %{http_code}\n" \
+    -X GET "$BASE_URL/current/user" \
+    -H "access-token: $ACCESS_TOKEN" \
+    -H "client: $CLIENT" \
+    -H "uid: $AUTH_UID"
   echo ""
 }
 
@@ -84,6 +100,7 @@ usage() {
   echo "  sign_in            サインイン（トークン表示のみ）"
   echo "  sign_in_and_save   サインイン（トークンをファイルに保存）"
   echo "  request_with_token 認証済みリクエスト（要: sign_in_and_save 済み）"
+  echo "  get_current_user   サインインユーザー取得（要: sign_in_and_save 済み）"
   echo "  all                上記を順番にすべて実行"
   echo ""
 }
@@ -94,11 +111,13 @@ case "$1" in
   sign_in)            sign_in ;;
   sign_in_and_save)   sign_in_and_save ;;
   request_with_token) request_with_token ;;
+  get_current_user)   get_current_user ;;
   all)
     health_check
     sign_up
     sign_in_and_save
     request_with_token
+    get_current_user
     ;;
   *) usage ;;
 esac
