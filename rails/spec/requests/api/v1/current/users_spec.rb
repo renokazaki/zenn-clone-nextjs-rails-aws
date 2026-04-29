@@ -10,7 +10,7 @@ RSpec.describe "Api::V1::Current::Users", type: :request do
     context "ヘッダー情報が正常に送られた時" do
       it "正常にレコードを取得できる" do
         subject
-        res = JSON.parse(response.body)
+        res = response.parsed_body
         expect(res.keys).to eq ["id", "name", "email"]
         expect(response).to have_http_status(:ok)
       end
@@ -21,7 +21,7 @@ RSpec.describe "Api::V1::Current::Users", type: :request do
 
       it "unauthorized エラーが返る" do
         subject
-        res = JSON.parse(response.body)
+        res = response.parsed_body
         expect(res["errors"]).to eq ["ログインもしくはアカウント登録してください。"]
         expect(response).to have_http_status(:unauthorized)
       end
