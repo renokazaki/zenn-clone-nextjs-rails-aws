@@ -406,3 +406,31 @@ ActiveRecord::PendingMigrationError:
 ```bash
 rails db:migrate RAILS_ENV=test
 ```
+
+---
+
+# `Article.published.find` でRecordNotFoundが上がらない
+
+## 症状
+
+下書き記事や存在しないIDに対して `GET /api/v1/articles/:id` を叩いても、`ActiveRecord::RecordNotFound` が発生せずにテストが失敗する。
+
+```
+expected ActiveRecord::RecordNotFound but nothing was raised
+```
+
+## 原因
+
+`find(id)` はレコードが**テーブルに存在しない**場合にのみ `RecordNotFound` を上げる。`Article.published` のようなスコープで絞り込んだ場合、スコープにマッチしないレコード（例: 下書き記事）は `find` の検索対象外になるが、例外は上がらず `nil` が返るだけになる。
+
+## 対処法
+
+`find` の代わりに `find_by!` を使う。`find_by!` はスコープで絞った結果が `nil` の場合にも `RecordNotFound` を上げる。
+
+```ruby
+# NG
+article = Article.published.find(params[:id])
+
+# OK
+article = Article.published.find_by!(id: params[:id])
+```
