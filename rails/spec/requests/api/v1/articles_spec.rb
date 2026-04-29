@@ -14,7 +14,7 @@ RSpec.describe "Api::V1::Articles", type: :request do
 
       it "1ページ目のレコード10件取得できる" do
         subject
-        res = JSON.parse(response.body)
+        res = response.parsed_body
         expect(res.keys).to eq ["articles", "meta"]
         expect(res["articles"].length).to eq 10
         expect(res["articles"][0].keys).to eq ["id", "title", "content", "created_at", "from_today", "user"]
@@ -31,7 +31,7 @@ RSpec.describe "Api::V1::Articles", type: :request do
 
       it "該当ページ目のレコード10件取得できる" do
         subject
-        res = JSON.parse(response.body)
+        res = response.parsed_body
         expect(res.keys).to eq ["articles", "meta"]
         expect(res["articles"].length).to eq 10
         expect(res["articles"][0].keys).to eq ["id", "title", "content", "created_at", "from_today", "user"]
@@ -57,7 +57,7 @@ RSpec.describe "Api::V1::Articles", type: :request do
 
         it "正常にレコードを取得できる" do
           subject
-          res = JSON.parse(response.body)
+          res = response.parsed_body
           expect(res.keys).to eq ["id", "title", "content", "created_at", "from_today", "user"]
           expect(res["user"].keys).to eq ["name"]
           expect(response).to have_http_status(:ok)
