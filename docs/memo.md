@@ -346,3 +346,37 @@ config.hosts << "rails"
 
 - `curl` で `http://rails:3000/...` を叩いた場合は HostAuthorization をバイパスできることがあるため、curl では成功してもブラウザ（Next.js 経由）では失敗するケースがある
 - サーバーコンポーネントの fetch URL は `http://rails:3000`（Docker サービス名）を使う（`docs/memo.md` の「データフェッチ」セクションも参照）
+
+---
+
+# devise_token_auth メール認証が `confirmation_success=false` になる
+
+## 症状
+
+`sign_up` 後にメール内のリンクを踏むと、以下のようにリダイレクトされ認証が失敗する。
+
+```
+http://localhost:8000?account_confirmation_success=false
+```
+
+## 原因
+
+`config/initializers/devise_token_auth.rb` の `send_confirmation_email` がデフォルトでコメントアウトされており、確認メールが実際には送信されていない。そのためトークンが正しく生成されず、認証リンクを踏んでも失敗する。
+
+## 対処法
+
+`config/initializers/devise_token_auth.rb` の該当行をコメントアウトから外す。
+
+```ruby
+config.send_confirmation_email = true
+```
+
+変更後はRailsサーバーを再起動し、DBの既存ユーザーを削除してからやり直す。
+
+```bash
+rails c
+User.destroy_all
+exit
+
+rails s -b '0.0.0.0'
+```
