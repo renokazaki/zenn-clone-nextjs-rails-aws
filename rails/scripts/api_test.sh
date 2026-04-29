@@ -90,18 +90,42 @@ get_current_user() {
   echo ""
 }
 
+# 記事一覧取得（ページ指定可）
+get_articles() {
+  PAGE=${2:-1}
+  echo "=== Get Articles (page=$PAGE) ==="
+  curl -s -w "\nStatus: %{http_code}\n" \
+    -X GET "$BASE_URL/articles?page=$PAGE"
+  echo ""
+}
+
+# 記事詳細取得
+get_article() {
+  ARTICLE_ID=$2
+  if [ -z "$ARTICLE_ID" ]; then
+    echo "使い方: $0 get_article <id>"
+    return 1
+  fi
+  echo "=== Get Article (id=$ARTICLE_ID) ==="
+  curl -s -w "\nStatus: %{http_code}\n" \
+    -X GET "$BASE_URL/articles/$ARTICLE_ID"
+  echo ""
+}
+
 # 使い方表示
 usage() {
   echo "使い方: $0 [コマンド]"
   echo ""
   echo "コマンド:"
-  echo "  health_check       ヘルスチェック"
-  echo "  sign_up            ユーザー新規作成"
-  echo "  sign_in            サインイン（トークン表示のみ）"
-  echo "  sign_in_and_save   サインイン（トークンをファイルに保存）"
-  echo "  request_with_token 認証済みリクエスト（要: sign_in_and_save 済み）"
-  echo "  get_current_user   サインインユーザー取得（要: sign_in_and_save 済み）"
-  echo "  all                上記を順番にすべて実行"
+  echo "  health_check          ヘルスチェック"
+  echo "  sign_up               ユーザー新規作成"
+  echo "  sign_in               サインイン（トークン表示のみ）"
+  echo "  sign_in_and_save      サインイン（トークンをファイルに保存）"
+  echo "  request_with_token    認証済みリクエスト（要: sign_in_and_save 済み）"
+  echo "  get_current_user      サインインユーザー取得（要: sign_in_and_save 済み）"
+  echo "  get_articles [page]   記事一覧取得（ページ番号省略時は1ページ目）"
+  echo "  get_article <id>      記事詳細取得"
+  echo "  all                   上記を順番にすべて実行"
   echo ""
 }
 
@@ -112,12 +136,15 @@ case "$1" in
   sign_in_and_save)   sign_in_and_save ;;
   request_with_token) request_with_token ;;
   get_current_user)   get_current_user ;;
+  get_articles)       get_articles "$@" ;;
+  get_article)        get_article "$@" ;;
   all)
     health_check
     sign_up
     sign_in_and_save
     request_with_token
     get_current_user
+    get_articles
     ;;
   *) usage ;;
 esac
