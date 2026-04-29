@@ -25,12 +25,17 @@ services:
     stdin_open: true
   next:
     build:
-      dockerfile: ./next/Dockerfile
+      context: ./next
+      dockerfile: Dockerfile
     tty: true
     stdin_open: true
     volumes:
       - ./next:/app
+      - next_node_modules:/app/node_modules
     ports:
       - "8000:3000"
+    depends_on:
+      - rails
 volumes:
   mysql_data:
+  next_node_modules:

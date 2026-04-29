@@ -2029,13 +2029,95 @@ cdk destroy ZennClonePermanentStack
 
 `cdk deploy ZennCloneAppStack` でRDSを再作成すると、DBが空の状態から始まります。
 `entrypoint.prod.sh` の `db:create` と `db:seed` が毎回必要になるため、
-起動のたびに `entrypoint.prod.sh` のコメントアウトを外す/入れるの管理が必要です。
+起動のたびにコメントアウトを手動で切り替えるのは手間です。
 
-#### 推奨の運用パターン
+#### 対策：entrypoint.prod.sh を冪等（べきとう）な書き方にする
 
-| ユースケース | 推奨戦略 |
-|---|---|
-| ポートフォリオを常時公開したい | AppStackを常時起動（月$30〜50）|
-| 開発・学習中（毎週数時間だけ使う）| 作業時だけ AppStack を起動・削除（月$1〜3）|
-| 面接前など一時的に公開したい | デモ期間だけ AppStack を起動（数日分の課金のみ）|
-| 完全にやめる | 両スタックを削除（ドメイン代のみ残る）|
+**冪等（べきとう）** とは「何度実行しても同じ結果になる」という意味です。
+以下のように書き換えると、`db:create` も `db:seed` も「すでに存在していればスキップ」する動作になるため、
+毎回削除・再作成しても手動でコメントアウトを切り替える必要がなくなります。
+
+```bash
+#!/bin/bash
+set -e
+
+echo "Start entrypoint.prod.sh"
+
+rm -f /myapp/tmp/pids/server.pid
+
+echo "bundle exec rails db:create RAILS_ENV=production"
+# db:create は既に存在する場合はスキップされるため、毎回実行しても安全
+bundle exec rails db:create RAILS_ENV=production
+
+echo "bundle exec rails db:migrate RAILS_ENV=production"
+# db:migrate は未実行のマイグレーションのみ実行するため、毎回実行しても安全
+bundle exec rails db:migrate RAILS_ENV=production
+
+echo "bundle exec rails db:seed RAILS_ENV=production"
+# db:seed はデータが重複しないよう Rails の find_or_create_by を使って実装しておくこと
+# → seeds.rb を冪等に書いておけば毎回実行しても安全
+bundle exec rails db:seed RAILS_ENV=production
+
+echo "exec pumactl start"
+bundle exec pumactl start
+```
+
+`db:seed` を冪等にするには `rails/db/seeds.rb` で `find_or_create_by` を使います。
+
+```ruby
+# rails/db/seeds.rb の書き方例
+# create ではなく find_or_create_by を使うことで、
+# 既存レコードがある場合は作成をスキップする
+User.find_or_create_by(email: 'test@example.com') do |u|
+  u.name = 'テストユーザー'
+  u.password = 'password'
+end
+```
+
+---
+
+### 推奨の運用パターン
+
+| ユースケース | 推奨戦略 | 月額目安 |
+|---|---|---|
+| ポートフォリオを常時公開したい | AppStackを常時起動 | $30〜50 / 月 |
+| 開発・学習中（毎週数時間だけ使う）| 作業時だけ AppStack を起動・削除 | $1〜3 / 月 |
+| 面接前など一時的に公開したい | デモ期間だけ AppStack を起動 | 数日分の課金のみ |
+| 完全にやめる | 両スタックを削除 | ドメイン代（年$13）のみ残る |
+
+---
+
+### 「使う時だけ起動」の全体フロー図
+
+```
+【初回セットアップ】
+  cdk deploy ZennClonePermanentStack   # VPC・ECR・ACM を作成（1回だけ）
+  ↓
+  docker push（Rails・Nginx・Next のイメージをECRにプッシュ）
+  ↓
+  cdk deploy ZennCloneAppStack         # RDS・ECS・ALB を起動
+  ↓
+  動作確認・ポートフォリオ公開
+
+
+【2回目以降の作業サイクル】
+
+  ┌─────────────────────────────────┐
+  │  cdk deploy ZennCloneAppStack   │  ← 作業開始（約15〜20分）
+  │    ↓                            │
+  │  コード変更・動作確認            │
+  │    ↓                            │
+  │  （必要なら docker push して    │
+  │   ECSタスク再起動）              │
+  │    ↓                            │
+  │  cdk destroy ZennCloneAppStack  │  ← 作業終了（約10〜15分）
+  └─────────────────────────────────┘
+
+
+【完全クリーンアップ（学習終了後）】
+  cdk destroy ZennCloneAppStack
+  ↓
+  cdk destroy ZennClonePermanentStack
+  ↓
+  ※ Route53 ドメインのみ年額が残る（AWSでは返却不可）
+```

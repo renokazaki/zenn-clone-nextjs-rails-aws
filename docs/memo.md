@@ -19,6 +19,9 @@
 ファイル: rails/Gemfile
 変更内容: Rails を ~> 7.1.5 → ~> 8.0  
  に更新
+
+gem "rubocop"追加
+
 ───────────────────────────────────────
 ─
 ファイル: rails/entorypoint.sh
@@ -204,3 +207,142 @@ Gemfile に追加してから `docker compose build --no-cache` で再ビルド�
 ```ruby
 gem "bootsnap", require: false
 ```
+
+---
+
+# CI（GitHub Actions）のエラー対応
+
+## エラー①: bundle install --path が失敗する
+
+### エラー内容
+
+```
+The `--path` flag has been removed because it relied on being remembered across bundler invocations
+Process completed with exit code 15.
+```
+
+### 原因
+
+`bundle install --path vendor/bundle` の `--path` フラグが Bundler 2.x 以降で廃止された。
+また `setup-ruby` の `bundler-cache: true` が自動で `bundle install` してくれるため、手動の `gem install bundler` と `bundle install` が二重になっていた。
+
+### 対処法
+
+`gem install bundler` と `bundle install --path vendor/bundle` の行を削除する。
+`setup-ruby` に `working-directory: rails` を追加して Gemfile を正しく検出させる。
+
+```yaml
+- name: Set up Ruby
+  uses: ruby/setup-ruby@v1
+  with:
+    ruby-version: 3.3.7
+    bundler-cache: true
+    working-directory: rails
+```
+
+## エラー②: config/database.yml.ci が存在しない
+
+### エラー内容
+
+```
+cp: cannot stat 'config/database.yml.ci': No such file or directory
+```
+
+### 原因
+
+CI の rspec job が `cp config/database.yml.ci config/database.yml` でCI用のDB設定に差し替えようとしているが、ファイルが存在しない。
+CI 環境の MySQL サービスは `localhost`（`127.0.0.1`）で動くため、ローカル開発用の `host: db`（Docker サービス名）のままでは接続できない。
+
+### 対処法
+
+`rails/config/database.yml.ci` を作成する。
+
+```yaml
+default: &default
+  adapter: mysql2
+  encoding: utf8mb4
+  pool: <%= ENV.fetch("RAILS_MAX_THREADS") { 5 } %>
+  username: root
+  password:
+  host: 127.0.0.1
+  port: 3306
+
+test:
+  <<: *default
+  database: myapp_test
+```
+
+---
+
+# rubocop 設定エラー対応
+
+## エラー内容
+
+```
+rubocop-rails extension supports plugin, specify `plugins: rubocop-rails` instead of `require: rubocop-rails`
+rubocop-rspec extension supports plugin, specify `plugins: rubocop-rspec` instead of `require: rubocop-rspec`
+Warning: The `Naming/PredicateName` cop has been renamed to `Naming/PredicatePrefix`.
+```
+
+## 原因
+
+RuboCop の新しいバージョンでは、拡張 gem（rubocop-rails / rubocop-rspec）は `require:` ではなく `plugins:` で読み込む仕様に変わった。
+また `Naming/PredicateName` は `Naming/PredicatePrefix` にリネームされた。
+さらに新しい cop が大量に追加されており、未設定のままだと警告が出る。
+
+## 対処法
+
+`.rubocop.yml` を以下のように修正する。
+
+```yaml
+plugins:
+  - rubocop-rails
+  - rubocop-rspec
+
+inherit_from:
+  - config/rubocop/rubocop.yml
+  - config/rubocop/rails.yml
+  - config/rubocop/rspec.yml
+
+AllCops:
+  TargetRubyVersion: 3.3
+  NewCops: enable
+```
+
+- `require:` を廃止し `plugins:` に統一（rubocop-rails / rubocop-rspec 両方）
+- サブファイル（`config/rubocop/rspec.yml`）に書いていた `require: "rubocop-rspec"` も削除する
+- `NewCops: enable` で新しい cop を一括有効化し警告を解消
+- `config/rubocop/rubocop.yml` の `Naming/PredicateName` → `Naming/PredicatePrefix` にリネーム
+
+---
+
+# Next.js → Rails API 疎通時のエラー対応
+
+## エラー内容
+
+```
+[ActionDispatch::HostAuthorization::DefaultResponseApp] Blocked hosts: rails:3000
+```
+
+Next.js サーバーコンポーネントから `http://rails:3000/api/v1/health_check` を fetch すると、Rails が `rails` というホスト名をブロックしてHTMLエラーページを返す。Next.js 側では JSON を期待しているため以下のエラーになる。
+
+```
+SyntaxError: Unexpected token '<', "<!DOCTYPE "... is not valid JSON
+```
+
+## 原因
+
+Rails の HostAuthorization ミドルウェアがデフォルトで `localhost` 以外のホストをブロックする。Docker ネットワーク内では Next.js コンテナから Rails コンテナへのリクエストのホストが `rails`（Dockerサービス名）になるため弾かれる。
+
+## 対処法
+
+`rails/config/environments/development.rb` に許可ホストを追加する。
+
+```ruby
+config.hosts << "rails"
+```
+
+## 補足
+
+- `curl` で `http://rails:3000/...` を叩いた場合は HostAuthorization をバイパスできることがあるため、curl では成功してもブラウザ（Next.js 経由）では失敗するケースがある
+- サーバーコンポーネントの fetch URL は `http://rails:3000`（Docker サービス名）を使う（`docs/memo.md` の「データフェッチ」セクションも参照）
