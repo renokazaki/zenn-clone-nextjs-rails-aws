@@ -346,3 +346,91 @@ config.hosts << "rails"
 
 - `curl` で `http://rails:3000/...` を叩いた場合は HostAuthorization をバイパスできることがあるため、curl では成功してもブラウザ（Next.js 経由）では失敗するケースがある
 - サーバーコンポーネントの fetch URL は `http://rails:3000`（Docker サービス名）を使う（`docs/memo.md` の「データフェッチ」セクションも参照）
+
+---
+
+# devise_token_auth メール認証が `confirmation_success=false` になる
+
+## 症状
+
+`sign_up` 後にメール内のリンクを踏むと、以下のようにリダイレクトされ認証が失敗する。
+
+```
+http://localhost:8000?account_confirmation_success=false
+```
+
+## 原因
+
+`config/initializers/devise_token_auth.rb` の `send_confirmation_email` がデフォルトでコメントアウトされており、確認メールが実際には送信されていない。そのためトークンが正しく生成されず、認証リンクを踏んでも失敗する。
+
+## 対処法
+
+`config/initializers/devise_token_auth.rb` の該当行をコメントアウトから外す。
+
+```ruby
+config.send_confirmation_email = true
+```
+
+変更後はRailsサーバーを再起動し、DBの既存ユーザーを削除してからやり直す。
+
+```bash
+rails c
+User.destroy_all
+exit
+
+rails s -b '0.0.0.0'
+```
+
+---
+
+# rspec実行時にPendingMigrationErrorが発生する
+
+## エラー内容
+
+```
+ActiveRecord::PendingMigrationError:
+  Migrations are pending. To resolve this issue, run:
+          bin/rails db:migrate
+  You have 1 pending migration:
+  db/migrate/XXXXXX_devise_token_auth_create_users.rb
+```
+
+## 原因
+
+テスト用DB（`RAILS_ENV=test`）に対してマイグレーションが実行されていない。開発用DBとテスト用DBは別々に管理されており、`rails db:migrate` だけでは開発用DBにしか適用されない。
+
+## 対処法
+
+テスト用DBに対して明示的にマイグレーションを実行する。
+
+```bash
+rails db:migrate RAILS_ENV=test
+```
+
+---
+
+# `Article.published.find` でRecordNotFoundが上がらない
+
+## 症状
+
+下書き記事や存在しないIDに対して `GET /api/v1/articles/:id` を叩いても、`ActiveRecord::RecordNotFound` が発生せずにテストが失敗する。
+
+```
+expected ActiveRecord::RecordNotFound but nothing was raised
+```
+
+## 原因
+
+`find(id)` はレコードが**テーブルに存在しない**場合にのみ `RecordNotFound` を上げる。`Article.published` のようなスコープで絞り込んだ場合、スコープにマッチしないレコード（例: 下書き記事）は `find` の検索対象外になるが、例外は上がらず `nil` が返るだけになる。
+
+## 対処法
+
+`find` の代わりに `find_by!` を使う。`find_by!` はスコープで絞った結果が `nil` の場合にも `RecordNotFound` を上げる。
+
+```ruby
+# NG
+article = Article.published.find(params[:id])
+
+# OK
+article = Article.published.find_by!(id: params[:id])
+```
