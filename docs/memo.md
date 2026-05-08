@@ -434,3 +434,35 @@ article = Article.published.find(params[:id])
 # OK
 article = Article.published.find_by!(id: params[:id])
 ```
+
+---
+
+# リクエストスペックで `raise_error(ActiveRecord::RecordNotFound)` が検知されない
+
+## 症状
+
+`find_by!` を使っているのに、リクエストスペックで以下のエラーが出てテストが失敗する。
+
+```
+expected ActiveRecord::RecordNotFound but nothing was raised
+```
+
+## 原因
+
+`config/environments/test.rb` の以下の設定が原因。
+
+```ruby
+config.action_dispatch.show_exceptions = :rescuable
+```
+
+`:rescuable` は `ActiveRecord::RecordNotFound` などのrescue可能な例外をRailsが自動的にキャッチして404レスポンスに変換する。そのためRSpecには例外が伝わらず、`raise_error` マッチャーが検知できない。
+
+## 対処法
+
+`test.rb` の設定を `false` に変更する。
+
+```ruby
+config.action_dispatch.show_exceptions = false
+```
+
+`false` にするとテスト環境では例外をRailsがrescueせず、そのままRSpecに伝播させるようになる。
