@@ -466,3 +466,83 @@ config.action_dispatch.show_exceptions = false
 ```
 
 `false` にするとテスト環境では例外をRailsがrescueせず、そのままRSpecに伝播させるようになる。
+
+---
+
+# Rails 8 で `show_exceptions = false` が効かない
+
+## 症状
+
+`config.action_dispatch.show_exceptions = false` を設定しているのに、リクエストスペックで `RecordNotFound` が伝播しない。
+
+## 原因
+
+Rails 8 では `show_exceptions` の有効な値が変わり、`false` は非推奨になった。
+
+| Rails バージョン | 設定値 |
+|---|---|
+| Rails 7以前 | `false` |
+| Rails 8以降 | `:none` |
+
+## 対処法
+
+`config/environments/test.rb` を以下に変更する。
+
+```ruby
+config.action_dispatch.show_exceptions = :none
+```
+
+---
+
+# `not_unsaved` スコープ未定義エラー
+
+## 症状
+
+`current/articles_controller.rb` で `current_user.articles.not_unsaved` を呼ぶと `NoMethodError` が発生する。
+
+## 原因
+
+`Article` モデルに `not_unsaved` スコープが定義されていない。`enum` を定義すると `unsaved` スコープは自動生成されるが、その否定形 `not_unsaved` は自動生成されない。
+
+## 対処法
+
+`app/models/article.rb` に明示的にスコープを追加する。
+
+```ruby
+scope :not_unsaved, -> { where.not(status: :unsaved) }
+```
+
+---
+
+# `ja.yml` のYAML構文エラーで全テストが失敗する
+
+## 症状
+
+全テストが以下のエラーでロード時点から失敗する。
+
+```
+Psych::SyntaxError: did not find expected key while parsing a block mapping at line 2 column 3
+```
+
+## 原因
+
+`config/locales/ja.yml` のインデントがずれているとYAMLパースに失敗し、Railsの起動時にエラーが発生する。特に `enums:` キーを `activerecord:` の子として書いてしまうケースで起きやすい。
+
+## 対処法
+
+`ja.yml` の構造を以下のように正しく修正する（`enums:` は `ja:` の直下）。
+
+```yaml
+ja:
+  activerecord:
+    attributes:
+      article:
+        title: タイトル
+        content: 本文
+  enums:
+    article:
+      status:
+        unsaved: 未保存
+        draft: 下書き
+        published: 公開中
+```
