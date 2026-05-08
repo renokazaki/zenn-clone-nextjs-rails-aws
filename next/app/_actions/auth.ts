@@ -70,7 +70,6 @@ export async function signUp(_prevState: AuthState, formData: FormData): Promise
     if (!res.ok) {
       const data = await res.json().catch(() => null);
       const errorMsg =
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (data?.errors?.full_messages as string[] | undefined)?.join(', ') ??
         'サインアップに失敗しました';
       return { error: errorMsg };

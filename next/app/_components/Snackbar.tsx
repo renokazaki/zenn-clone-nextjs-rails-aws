@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useSearchParams, usePathname, useRouter } from 'next/navigation';
 import MuiSnackbar from '@mui/material/Snackbar';
 import Alert, { type AlertColor } from '@mui/material/Alert';
@@ -9,19 +9,10 @@ export default function Snackbar() {
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const router = useRouter();
-  const [open, setOpen] = useState(false);
-  const [message, setMessage] = useState('');
-  const [severity, setSeverity] = useState<AlertColor>('success');
 
-  useEffect(() => {
-    const msg = searchParams.get('message');
-    const sev = searchParams.get('severity') as AlertColor | null;
-    if (msg) {
-      setMessage(msg);
-      setSeverity(sev ?? 'success');
-      setOpen(true);
-    }
-  }, [searchParams]);
+  const message = searchParams.get('message') ?? '';
+  const severity = (searchParams.get('severity') as AlertColor | null) ?? 'success';
+  const [open, setOpen] = useState(!!message);
 
   const handleClose = () => {
     setOpen(false);
